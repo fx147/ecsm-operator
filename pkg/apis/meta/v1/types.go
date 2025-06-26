@@ -1,9 +1,11 @@
 package v1
 
-import "time"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
 
 // 描述了资源的类型
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type TypeMeta struct {
 	// 此对象所表示的REST资源
 	// +required
@@ -15,7 +17,6 @@ type TypeMeta struct {
 }
 
 // 描述一个资源实例所需要的元数据
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ObjectMeta struct {
 	// 用户通过yaml文件创建资源实例时指定的名称
 	// +required
@@ -45,15 +46,14 @@ type ObjectMeta struct {
 
 	// 创建时间
 	// +readonly
-	CreationTimestamp time.Time `json:"creationTimestamp,omitempty"`
+	CreationTimestamp metav1.Time `json:"creationTimestamp,omitempty"`
 	// 删除时间，如果不为nil，表示对象正在被删除
 	// +readonly
-	DeletionTimestamp *time.Time `json:"deletionTimestamp,omitempty"`
+	DeletionTimestamp *metav1.Time `json:"deletionTimestamp,omitempty"`
 }
 
 // ListMeta 包含了列表（集合）资源所需的元数据。
 // 主要用于支持分页和集合的版本控制。
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ListMeta struct {
 	// ResourceVersion 是一个字符串，表示此列表所代表的资源的版本。
 	// 客户端可以用它来发起 watch 请求。
@@ -81,7 +81,6 @@ const (
 	ConditionStatusUnknown ConditionStatus = "Unknown"
 )
 
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Condition struct {
 	// Type 是condition的类型，例如Ready
 	// +required
@@ -91,7 +90,7 @@ type Condition struct {
 	Status ConditionStatus `json:"status,omitempty"`
 	// LastTransitionTime 是condition最后一次转换的时间
 	// +optional
-	LastTransitionTime time.Time `json:"lastTransitionTime,omitempty"`
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
 	// Reason 是condition转换的原因
 	// +optional
 	Reason string `json:"reason,omitempty"`
@@ -100,7 +99,6 @@ type Condition struct {
 	Message string `json:"message,omitempty"`
 }
 
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type OwnerReference struct {
 	// APIVersion 是引用对象的API版本
 	// +required
@@ -117,4 +115,23 @@ type OwnerReference struct {
 	// Controller 是一个布尔值，表示是否是控制器
 	// +optional
 	Controller *bool `json:"controller,omitempty"`
+}
+
+// GetObjectKind 返回一个指向该对象类型信息的指针。
+// 因为 *TypeMeta 实现了 schema.ObjectKind 接口，所以可以直接返回自身。
+func (t *TypeMeta) GetObjectKind() schema.ObjectKind {
+	return t
+}
+
+// SetGroupVersionKind 为对象设置 GroupVersionKind 信息。
+// 这是实现 schema.ObjectKind 接口所必需的方法。
+func (t *TypeMeta) SetGroupVersionKind(gvk schema.GroupVersionKind) {
+	t.APIVersion, t.Kind = gvk.ToAPIVersionAndKind()
+}
+
+// GroupVersionKind 返回对象的 GroupVersionKind。
+// 如果 APIVersion 或 Kind 为空，它可能返回不完整的 GVK。
+// 这也是实现 schema.ObjectKind 接口所必需的方法。
+func (t *TypeMeta) GroupVersionKind() schema.GroupVersionKind {
+	return schema.FromAPIVersionAndKind(t.APIVersion, t.Kind)
 }

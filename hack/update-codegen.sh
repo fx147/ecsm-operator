@@ -8,4 +8,6 @@ set -o pipefail
 SCRIPT_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 BOILERPLATE_PATH="${SCRIPT_ROOT}/hack/boilerplate.go.txt"
 
-echo "暂无代码生成任务"
+DEEPCOPY_GEN="$(go env GOPATH)/bin/deepcopy-gen"
+
+"${DEEPCOPY_GEN}" -i ${SCRIPT_ROOT}/pkg/apis/ecsm/v1 -O zz_generated.deepcopy --output-file-base zz_generated.deepcopy --output-package ./pkg/apis/ecsm/v1 --go-header-file hack/boilerplate.go.txt
