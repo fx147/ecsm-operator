@@ -7,7 +7,7 @@ import (
 	"reflect"
 
 	v1 "github.com/fx147/ecsm-operator/pkg/apis/ecsm/v1"
-	ecsmmetav1 "github.com/fx147/ecsm-operator/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -26,11 +26,11 @@ func main() {
 
 	// 创建一个具体的 ECSMService 实例用于测试
 	originalService := &v1.ECSMService{
-		TypeMeta: ecsmmetav1.TypeMeta{
+		TypeMeta: metav1.TypeMeta{
 			APIVersion: "ecsm.sh/v1alpha1",
 			Kind:       "ECSMService",
 		},
-		ObjectMeta: ecsmmetav1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-test-app",
 			Namespace: "default",
 			Labels: map[string]string{

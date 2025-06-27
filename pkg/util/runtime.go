@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"reflect"
 
-	metav1 "github.com/fx147/ecsm-operator/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )

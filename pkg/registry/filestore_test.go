@@ -11,8 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	ecsmv1 "github.com/fx147/ecsm-operator/pkg/apis/ecsm/v1"
-	metav1 "github.com/fx147/ecsm-operator/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newTestService 是一个辅助函数，用于快速创建一个测试用的 ECSMService 对象。

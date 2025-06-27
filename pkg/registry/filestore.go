@@ -66,7 +66,7 @@ func (fs *FileStore) Create(obj runtime.Object) error {
 		return err
 	}
 
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 		meta, _ := util.GetObjectMeta(obj)
 		gvk, _ := util.GetGVK(obj, fs.scheme)
 		gr := schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"}
@@ -74,13 +74,13 @@ func (fs *FileStore) Create(obj runtime.Object) error {
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory for object: %w", err)
+	if mkdirErr := os.MkdirAll(dir, 0755); mkdirErr != nil {
+		return fmt.Errorf("failed to create directory for object: %w", mkdirErr)
 	}
 
-	data, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal object to json: %w", err)
+	data, marshalErr := json.MarshalIndent(obj, "", "  ")
+	if marshalErr != nil {
+		return fmt.Errorf("failed to marshal object to json: %w", marshalErr)
 	}
 
 	return os.WriteFile(path, data, 0644)
@@ -92,16 +92,16 @@ func (fs *FileStore) Update(obj runtime.Object) error {
 		return err
 	}
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 		meta, _ := util.GetObjectMeta(obj)
 		gvk, _ := util.GetGVK(obj, fs.scheme)
 		gr := schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"}
 		return errors.NewNotFound(gr, meta.Name)
 	}
 
-	data, err := json.MarshalIndent(obj, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal object to json: %w", err)
+	data, marshalErr := json.MarshalIndent(obj, "", "  ")
+	if marshalErr != nil {
+		return fmt.Errorf("failed to marshal object to json: %w", marshalErr)
 	}
 
 	return os.WriteFile(path, data, 0644)
@@ -132,7 +132,7 @@ func (fs *FileStore) List(namespace string, listInto runtime.Object) error {
 		return err
 	}
 
-	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(dirPath); os.IsNotExist(statErr) {
 		return nil
 	}
 
