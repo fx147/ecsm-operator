@@ -10,8 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	ecsmv1 "github.com/fx147/ecsm-operator/pkg/apis/ecsm/v1"
-	metav1 "github.com/fx147/ecsm-operator/pkg/apis/meta/v1"
+	"github.com/fx147/ecsm-operator/pkg/util"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -20,61 +19,26 @@ import (
 // FileStore 实现了 Store 接口，使用本地文件系统作为后端。
 type FileStore struct {
 	basePath string
+	scheme   *runtime.Scheme
 }
 
 var _ Store = &FileStore{}
 
-func NewFileStore(basePath string) (*FileStore, error) {
+func NewFileStore(basePath string, scheme *runtime.Scheme) (*FileStore, error) {
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create base path for filestore: %w", err)
 	}
-	return &FileStore{basePath: basePath}, nil
-}
-
-// --- 辅助函数 (已重构) ---
-
-// getGVK 根据对象的 Go 类型返回其 GroupVersionKind。
-// 它可以安全地处理单数和列表类型的对象。
-func getGVK(obj runtime.Object) (schema.GroupVersionKind, error) {
-	switch obj.(type) {
-	case *ecsmv1.ECSMService:
-		return ecsmv1.SchemeGroupVersion.WithKind("ECSMService"), nil
-	case *ecsmv1.ECSMServiceList:
-		return ecsmv1.SchemeGroupVersion.WithKind("ECSMServiceList"), nil
-	default:
-		return schema.GroupVersionKind{}, fmt.Errorf("unhandled type for GVK extraction: %T", obj)
-	}
-}
-
-// getObjectMeta 从对象中提取 ObjectMeta。
-// 如果对象没有 ObjectMeta 字段，它将返回错误。
-func getObjectMeta(obj runtime.Object) (*metav1.ObjectMeta, error) {
-	val := reflect.ValueOf(obj)
-	if val.Kind() == reflect.Ptr {
-		val = val.Elem()
-	}
-	if val.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("object is not a struct")
-	}
-
-	metaField := val.FieldByName("ObjectMeta")
-	if !metaField.IsValid() {
-		return nil, fmt.Errorf("object does not have ObjectMeta field")
-	}
-
-	meta, ok := metaField.Addr().Interface().(*metav1.ObjectMeta)
-	if !ok {
-		return nil, fmt.Errorf("field ObjectMeta is not of type *metav1.ObjectMeta")
-	}
-	return meta, nil
+	return &FileStore{basePath: basePath, scheme: scheme}, nil
 }
 
 func (fs *FileStore) getPathForObject(obj runtime.Object) (string, error) {
-	gvk, err := getGVK(obj)
+	gvk, err := util.GetGVK(obj, fs.scheme)
 	if err != nil {
 		return "", err
 	}
-	meta, err := getObjectMeta(obj)
+
+	// 这里list应该不会调用
+	meta, err := util.GetObjectMeta(obj)
 	if err != nil {
 		return "", err
 	}
@@ -84,7 +48,7 @@ func (fs *FileStore) getPathForObject(obj runtime.Object) (string, error) {
 }
 
 func (fs *FileStore) getDirForKind(namespace string, obj runtime.Object) (string, error) {
-	gvk, err := getGVK(obj)
+	gvk, err := util.GetGVK(obj, fs.scheme)
 	if err != nil {
 		return "", err
 	}
@@ -103,8 +67,8 @@ func (fs *FileStore) Create(obj runtime.Object) error {
 	}
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		meta, _ := getObjectMeta(obj)
-		gvk, _ := getGVK(obj)
+		meta, _ := util.GetObjectMeta(obj)
+		gvk, _ := util.GetGVK(obj, fs.scheme)
 		gr := schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"}
 		return errors.NewAlreadyExists(gr, meta.Name)
 	}
@@ -129,8 +93,8 @@ func (fs *FileStore) Update(obj runtime.Object) error {
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		meta, _ := getObjectMeta(obj)
-		gvk, _ := getGVK(obj)
+		meta, _ := util.GetObjectMeta(obj)
+		gvk, _ := util.GetGVK(obj, fs.scheme)
 		gr := schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"}
 		return errors.NewNotFound(gr, meta.Name)
 	}
@@ -153,7 +117,7 @@ func (fs *FileStore) Get(namespace, name string, objInto runtime.Object) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			gvk, _ := getGVK(objInto)
+			gvk, _ := util.GetGVK(objInto, fs.scheme)
 			gr := schema.GroupResource{Group: gvk.Group, Resource: strings.ToLower(gvk.Kind) + "s"}
 			return errors.NewNotFound(gr, name)
 		}

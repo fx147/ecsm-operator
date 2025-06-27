@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	ecsmv1 "github.com/fx147/ecsm-operator/pkg/apis/ecsm/v1"
 	metav1 "github.com/fx147/ecsm-operator/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -31,11 +33,30 @@ func newTestService(namespace, name string) *ecsmv1.ECSMService {
 	}
 }
 
+// newTestScheme 是一个新的辅助函数，专门用于创建和初始化我们的 Scheme。
+// 这让我们的测试代码更清晰。
+func newTestScheme() *runtime.Scheme {
+	// 1. 创建一个全新的、空的 Scheme 实例。
+	s := runtime.NewScheme()
+
+	// 2. 调用我们 API 包中 register.go 文件提供的 AddToScheme 函数。
+	//    这将把 ECSMService 和 ECSMServiceList 的类型信息注册到 s 中。
+	//    我们在这里可以忽略错误，因为我们确信它会成功。
+	_ = ecsmv1.AddToScheme(s)
+
+	return s
+}
+
 func TestFileStore(t *testing.T) {
 	// 1. 创建一个临时的测试目录
 	// t.TempDir() 是 Go 1.15+ 的一个非常有用的功能，它会在测试结束后自动清理目录。
 	tempDir := t.TempDir()
-	store, err := NewFileStore(tempDir)
+
+	// 2. 创建新的Scheme
+	testScheme := newTestScheme()
+
+	// 3. 创建 FileStore 实例
+	store, err := NewFileStore(tempDir, testScheme)
 	if err != nil {
 		t.Fatalf("Failed to create FileStore: %v", err)
 	}
