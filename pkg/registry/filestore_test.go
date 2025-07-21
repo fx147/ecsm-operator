@@ -175,7 +175,7 @@ func TestFileStore(t *testing.T) {
 		}
 	})
 
-	// 验证最终文件结构是否正确（可选，用于调试）
+	// 验证最终文件结构是否正确
 	t.Run("VerifyFileStructure", func(t *testing.T) {
 		expectedPath := filepath.Join(tempDir, "ecsm.sh", "v1", "ecsmservices", "production", "app-one.json")
 		if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
