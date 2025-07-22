@@ -146,41 +146,66 @@ type Result struct {
 	err        error
 }
 
-// Into 解码响应体到传入的 obj 对象中。
-func (r *Result) Into(obj interface{}) error {
-	if r.err != nil {
-		return r.err
-	}
-	defer r.body.Close()
-
-	// --- 统一的响应处理逻辑 ---
-	var apiResp response
-	bodyBytes, err := io.ReadAll(r.body)
+// transformAndGetRawData 是一个新的辅助方法。
+// 它解码通用的响应信封，检查 API 错误，如果成功，则返回原始的 data 字段。
+func (r *Result) transformAndGetRawData() (json.RawMessage, error) {
+	// 先调用 Raw() 获取原始 body
+	bodyBytes, err := r.Raw()
 	if err != nil {
-		klog.ErrorS(err, "Failed to read response body")
-		return fmt.Errorf("failed to read response body: %w", err)
+		return nil, err
 	}
 
-	// 添加调试信息：打印原始响应内容
-	klog.V(4).InfoS("Raw response body", "body", string(bodyBytes), "statusCode", r.statusCode)
+	// 如果 body 为空，直接返回成功
+	if len(bodyBytes) == 0 {
+		return nil, nil
+	}
 
+	// 解码到通用的 response 结构体
+	var apiResp Response
 	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
-		klog.ErrorS(err, "Failed to decode generic response", "rawBody", string(bodyBytes))
-		return fmt.Errorf("failed to decode generic response: %w", err)
+		return nil, fmt.Errorf("failed to decode generic response: %w (raw response: %q)", err, string(bodyBytes))
 	}
 
+	// 检查 API 级别的错误
 	if apiResp.Status != 200 {
-		return &aerror{
+		return nil, &Aerror{
 			Status:      apiResp.Status,
 			Message:     apiResp.Message,
 			FieldErrors: apiResp.FieldErrors,
 		}
 	}
 
-	if obj != nil {
-		if err := json.Unmarshal(apiResp.Data, obj); err != nil {
-			return fmt.Errorf("failed to unmarshal data into object: %w", err)
-		}
+	// 返回原始的 data 字段以供进一步处理
+	return apiResp.Data, nil
+}
+
+// Into 解码响应体到传入的 obj 对象中。
+// 我们让它内部调用 transformAndGetRawData 来复用逻辑。
+func (r *Result) Into(obj interface{}) error {
+	rawData, err := r.transformAndGetRawData()
+	if err != nil {
+		return err
 	}
+
+	// 如果请求成功，但没有 data 或者调用者不关心，则直接返回
+	if obj == nil || len(rawData) == 0 || string(rawData) == "null" {
+		return nil
+	}
+
+	// 解码 data 部分
+	if err := json.Unmarshal(rawData, obj); err != nil {
+		return fmt.Errorf("failed to unmarshal data into object: %w", err)
+	}
+
 	return nil
+}
+
+// Raw 读取并返回原始的响应体 []byte。
+// 注意：这个操作会消耗掉响应体，不能与 Into() 同时使用。
+func (r *Result) Raw() ([]byte, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	defer r.body.Close()
+	return io.ReadAll(r.body)
 }

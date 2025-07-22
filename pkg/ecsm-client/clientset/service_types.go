@@ -159,7 +159,7 @@ type ServiceGet struct {
 
 // --- List Options and Response Structures ---
 // ListServiceOptions 封装了所有可以用于 List 服务的查询参数。
-type ListServiceOptions struct {
+type ListServicesOptions struct {
 	PageNum  int    `json:"pageNum"`  // 必填
 	PageSize int    `json:"pageSize"` // 必填
 	Name     string `json:"name,omitempty"`

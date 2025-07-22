@@ -7,6 +7,7 @@ type Interface interface {
 	ServiceGetter
 	RecordGetter
 	ContainerGetter
+	NodeGetter
 }
 
 type Clientset struct {
@@ -34,7 +35,7 @@ func (c *Clientset) RESTClient() rest.RESTClient {
 
 // Services 返回 ServiceInterface，用于操作 Service 资源
 func (c *Clientset) Services() ServiceInterface {
-	return newService(&c.restClient)
+	return newServices(&c.restClient)
 }
 
 // Records 返回 RecordInterface，用于操作 Record 资源
@@ -44,5 +45,9 @@ func (c *Clientset) Records() RecordInterface {
 
 // Containers 返回 ContainerInterface，用于操作 Container 资源
 func (c *Clientset) Containers() ContainerInterface {
-	return nil // 暂未实现
+	return newContainers(&c.restClient)
+}
+
+func (c *Clientset) Nodes() NodeInterface {
+	return newNodes(&c.restClient)
 }

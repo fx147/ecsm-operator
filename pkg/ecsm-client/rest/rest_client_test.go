@@ -205,7 +205,7 @@ func TestRESTClient_ErrorHandling(t *testing.T) {
 	}
 
 	// 验证错误类型和内容
-	if apiErr, ok := err.(*aerror); ok {
+	if apiErr, ok := err.(*Aerror); ok {
 		if apiErr.Status != 400 {
 			t.Errorf("Expected status 400, got %d", apiErr.Status)
 		}

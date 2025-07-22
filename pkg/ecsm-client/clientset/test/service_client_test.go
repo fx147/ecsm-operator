@@ -34,7 +34,7 @@ func TestServiceClient_List(t *testing.T) {
 	ctx := context.Background()
 
 	// 列出服务
-	opts := clientset.ListServiceOptions{
+	opts := clientset.ListServicesOptions{
 		PageNum:  1,
 		PageSize: 10,
 	}
@@ -69,7 +69,7 @@ func TestServiceClient_Get(t *testing.T) {
 	ctx := context.Background()
 
 	// 首先列出服务，获取第一个服务的 ID
-	opts := clientset.ListServiceOptions{
+	opts := clientset.ListServicesOptions{
 		PageNum:  1,
 		PageSize: 1,
 	}

@@ -23,15 +23,13 @@ type ServiceInterface interface {
 	Get(ctx context.Context, serviceID string) (*ServiceGet, error)
 
 	// List 列出所有服务，支持通过 Options 进行过滤。
-	List(ctx context.Context, opts ListServiceOptions) (*ServiceList, error)
+	List(ctx context.Context, opts ListServicesOptions) (*ServiceList, error)
 
 	// Update 修改一个已存在的服务。
 	Update(ctx context.Context, serviceID string, service *UpdateServiceRequest) (*ServiceCreateResponse, error)
 
 	// Delete 根据服务 ID 删除一个服务。
 	Delete(ctx context.Context, serviceID string) (*ServiceDeleteResponse, error)
-
-	// // --- 批量操作 ---
 
 	// // DeleteByPath 根据资源模板路径批量删除服务。
 	// DeleteByPath(ctx context.Context, path string) error
@@ -57,7 +55,7 @@ type serviceClient struct {
 	restClient rest.Interface
 }
 
-func newService(restClient rest.Interface) *serviceClient {
+func newServices(restClient rest.Interface) *serviceClient {
 	return &serviceClient{restClient: restClient}
 }
 
@@ -120,7 +118,7 @@ func (c *serviceClient) Get(ctx context.Context, serviceID string) (*ServiceGet,
 }
 
 // List 实现了 ServiceInterface 的 List 方法。
-func (c *serviceClient) List(ctx context.Context, opts ListServiceOptions) (*ServiceList, error) {
+func (c *serviceClient) List(ctx context.Context, opts ListServicesOptions) (*ServiceList, error) {
 	result := &ServiceList{}
 
 	// 开始构建请求
@@ -150,15 +148,4 @@ func (c *serviceClient) List(ctx context.Context, opts ListServiceOptions) (*Ser
 	}
 
 	return result, nil
-}
-
-// ValidationResult 封装了名称校验的结果。
-type ValidationResult struct {
-	// IsValid bool
-	// Reason  string
-}
-
-// ServiceStatistics 封装了服务的统计信息。
-type ServiceStatistics struct {
-	// ... (e.g., Total, Running, Deploying) ...
 }
