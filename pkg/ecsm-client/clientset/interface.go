@@ -51,3 +51,7 @@ func (c *Clientset) Containers() ContainerInterface {
 func (c *Clientset) Nodes() NodeInterface {
 	return newNodes(&c.restClient)
 }
+
+func (c *Clientset) Images() ImageInterface {
+	return newImages(&c.restClient)
+}

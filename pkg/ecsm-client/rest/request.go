@@ -11,19 +11,20 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 
 	"k8s.io/klog/v2"
 )
 
 // Request 允许以链式方式构建请求。
 type Request struct {
-	c          *RESTClient
-	verb       string
-	resource   string
-	resourceID string
-	body       interface{}
-	err        error
-	params     url.Values
+	c    *RESTClient
+	verb string
+	// --- 路径构建字段 ---
+	pathParts []string // 不再使用 resource, resourceID，而是用一个切片
+	body      interface{}
+	err       error
+	params    url.Values
 }
 
 func NewRequest(c *RESTClient) *Request {
@@ -43,25 +44,27 @@ func (r *Request) Resource(resource string) *Request {
 	if r.err != nil {
 		return r
 	}
-	r.resource = resource
+	r.pathParts = append(r.pathParts, resource)
 	return r
 }
 
-// Name 指定要操作的资源的具体名称/ID。
+// Name 追加一个资源名称/ID段到路径中。
+// 它必须在 Resource() 之后调用。
 func (r *Request) Name(name string) *Request {
 	if r.err != nil {
 		return r
 	}
-	if len(name) == 0 {
-		r.err = fmt.Errorf("resource name may not be empty")
+	if len(r.pathParts) == 0 {
+		r.err = fmt.Errorf("cannot call Name() before Resource()")
 		return r
 	}
-	if len(r.resourceID) != 0 {
-		r.err = fmt.Errorf("resource name already set to %q, cannot change to %q", r.resourceID, name)
-		return r
-	}
-	r.resourceID = name
+	r.pathParts = append(r.pathParts, name)
 	return r
+}
+
+// Subresource 是 Resource() 的别名，让链式调用更易读。
+func (r *Request) Subresource(subresource string) *Request {
+	return r.Resource(subresource)
 }
 
 // Body 设置请求体。传入的 obj 会被序列化为 JSON。
@@ -91,13 +94,14 @@ func (r *Request) Do(ctx context.Context) *Result {
 		return &Result{err: r.err}
 	}
 
-	// ---- 完整的请求构建和执行逻辑 ----
-	// 1. 构建 URL
-	p := path.Join(r.c.apiPath, r.c.apiVersion, r.resource)
-	// p := path.Join(r.c.apiVersion, r.resource)
-	if r.resourceID != "" {
-		p = path.Join(p, r.resourceID)
-	}
+	// ---- 核心修复逻辑 ----
+	// 1. 构建 URL 路径
+	resourcePath := strings.Join(r.pathParts, "/")
+
+	// --- 关键修正 ---
+	// 我们必须在这里包含 API 的基础路径 "api"。
+	p := path.Join(defaultAPIPath, r.c.apiVersion, resourcePath)
+
 	fullURL := r.c.baseURL.ResolveReference(&url.URL{Path: p})
 
 	if len(r.params) > 0 {
