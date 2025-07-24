@@ -25,6 +25,8 @@ type ServiceInterface interface {
 	// List 列出所有服务，支持通过 Options 进行过滤。
 	List(ctx context.Context, opts ListServicesOptions) (*ServiceList, error)
 
+	ListAll(ctx context.Context, opts ListServicesOptions) ([]ProvisionListRow, error)
+
 	// Update 修改一个已存在的服务。
 	Update(ctx context.Context, serviceID string, service *UpdateServiceRequest) (*ServiceCreateResponse, error)
 
@@ -148,4 +150,32 @@ func (c *serviceClient) List(ctx context.Context, opts ListServicesOptions) (*Se
 	}
 
 	return result, nil
+}
+
+func (c *serviceClient) ListAll(ctx context.Context, opts ListServicesOptions) ([]ProvisionListRow, error) {
+	var allItems []ProvisionListRow
+	opts.PageNum = 1
+	if opts.PageSize == 0 {
+		opts.PageSize = 100
+	}
+
+	for {
+		list, err := c.List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(list.Items) == 0 {
+			break
+		}
+
+		allItems = append(allItems, list.Items...)
+
+		if len(allItems) >= list.Total {
+			break
+		}
+
+		opts.PageNum++
+	}
+	return allItems, nil
 }

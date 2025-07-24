@@ -38,9 +38,15 @@ type NodeInterface interface {
 
 	List(ctx context.Context, opts NodeListOptions) (*NodeList, error)
 
+	ListAll(ctx context.Context, opts NodeListOptions) ([]NodeInfo, error)
+
 	GetByID(ctx context.Context, nodeID string) (*NodeDetailsByID, error)
 
 	GetByName(ctx context.Context, nodeName string) (*NodeDetailsByName, error) // 返回 *NodeDetailsByName
+
+	GetNodeView(ctx context.Context, nodeID string) (*NodeView, error)
+
+	GetNodeMetrics(ctx context.Context, opts NodeMetricsOptions) ([]NodeMetrics, error)
 
 	// ListStatus 根据一组节点 ID，批量获取它们的实时运行时状态。
 	ListStatus(ctx context.Context, nodeIDs []string) ([]NodeStatus, error)
@@ -311,4 +317,61 @@ func (c *nodeClient) Delete(ctx context.Context, nodeIDs []string) ([]NodeDelete
 	}
 
 	return nil, fmt.Errorf("unexpected data format in delete response: %s", string(trimmedData))
+}
+
+// ListAll 实现了 NodeInterface 的同名方法。
+func (c *nodeClient) ListAll(ctx context.Context, opts NodeListOptions) ([]NodeInfo, error) {
+	var allNodes []NodeInfo
+	// 确保 PageNum 从 1 开始
+	opts.PageNum = 1
+
+	// 如果用户没有指定 PageSize，我们用一个较大的默认值来提高效率
+	if opts.PageSize == 0 {
+		opts.PageSize = 100
+	}
+
+	for {
+		// 调用同一个客户端的 List 方法获取一页数据
+		list, err := c.List(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		// 如果当前页没有任何数据，说明已经结束
+		if len(list.Items) == 0 {
+			break
+		}
+
+		allNodes = append(allNodes, list.Items...)
+
+		// 检查是否已获取所有
+		if len(allNodes) >= list.Total {
+			break
+		}
+
+		// 准备获取下一页
+		opts.PageNum++
+	}
+	return allNodes, nil
+}
+
+func (c *nodeClient) GetNodeView(ctx context.Context, nodeID string) (*NodeView, error) {
+	result := &NodeView{}
+	err := c.restClient.Get().
+		Resource("overview/platform/node-view").
+		Name(nodeID).
+		Do(ctx).
+		Into(result)
+	return result, err
+}
+
+func (c *nodeClient) GetNodeMetrics(ctx context.Context, opts NodeMetricsOptions) ([]NodeMetrics, error) {
+	var result []NodeMetrics
+	req := c.restClient.Get().
+		Resource("overview/node").
+		Param("nodeId", opts.NodeID).
+		Param("instant", strconv.FormatBool(opts.Instant))
+	// ... (add other optional params)
+	err := req.Do(ctx).Into(&result)
+	return result, err
 }

@@ -185,3 +185,69 @@ type ConflictingService struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
+
+// --- NodeView Structures ---
+type NodeView struct {
+	ID       string              `json:"id"`
+	Status   string              `json:"status"`
+	Type     string              `json:"type"`
+	Name     string              `json:"name"`
+	Children []NodeViewContainer `json:"children"`
+	// ... (其他静态字段如 ip, arch)
+}
+type NodeViewContainer struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	NodeID    string              `json:"node_id"`
+	ServiceID string              `json:"pro_id"`
+	Type      string              `json:"type"`
+	Status    string              `json:"status"`
+	Children  []NodeViewProvision `json:"children"`
+}
+type NodeViewProvision struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Health bool   `json:"health"`
+}
+
+// --- NodeMetrics Structures ---
+type NodeMetrics struct {
+	Timestamp    int64               `json:"timestamp"`
+	Type         string              `json:"type"`
+	CPU          MetricValue         `json:"cpu"`
+	ROM          MetricValueWithSize `json:"rom"`
+	RAM          MetricValueWithSize `json:"ram"`
+	ProcessCount int                 `json:"processCount"`
+	Processes    []ProcessMetrics    `json:"process"`
+	UpNet        []NetMetrics        `json:"upNet"`
+	DownNet      []NetMetrics        `json:"downNet"`
+	Uptime       float64             `json:"upTime"`
+	Running      int                 `json:"running"`
+	Stop         int                 `json:"stop"`
+}
+type MetricValue struct {
+	Percent string `json:"percent"`
+}
+type MetricValueWithSize struct {
+	Percent string  `json:"percent"`
+	Size    float64 `json:"size"`
+}
+type ProcessMetrics struct {
+	Name string              `json:"name"`
+	CPU  MetricValue         `json:"cpu"`
+	RAM  MetricValueWithSize `json:"ram"`
+}
+type NetMetrics struct {
+	NetworkName string  `json:"networkName"`
+	Value       float64 `json:"value"`
+}
+
+type NodeMetricsOptions struct {
+	NodeID    string
+	Instant   bool
+	StartTime string
+	EndTime   string
+	Step      int
+}

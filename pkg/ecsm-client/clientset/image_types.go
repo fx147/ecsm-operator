@@ -139,7 +139,7 @@ type ImageDetails struct {
 	Size        float64         `json:"size"`
 	Author      *string         `json:"author"`
 	RawConfig   string          `json:"rawConfig"`
-	Config      *EcsImageConfig `json:"config"` // 复用我们统一的 ImageConfig
+	Config      *EcsImageConfig `json:"config"`
 	OCIVersion  string          `json:"ociVersion"`
 	Hostname    *string         `json:"hostname"`
 	Tag         string          `json:"tag"`

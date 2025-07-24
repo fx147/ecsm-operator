@@ -2,6 +2,7 @@ package clientset
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/fx147/ecsm-operator/pkg/ecsm-client/rest"
@@ -14,12 +15,18 @@ type ContainerGetter interface {
 type ContainerInterface interface {
 	GetByTaskID(ctx context.Context, taskId string) (*ContainerInfo, error)
 
+	GetByName(ctx context.Context, serviceClient ServiceInterface, name string) (*ContainerInfo, error)
+
 	// GetByTaskID 根据容器的 *任务ID* 获取其详细信息。
 	GetHistory(ctx context.Context, opts ContainerHistoryOptions) (*ContainerHistoryList, error)
 
 	ListByService(ctx context.Context, opts ListContainersByServiceOptions) (*ContainerList, error)
 
+	ListAllByService(ctx context.Context, opts ListContainersByServiceOptions) ([]ContainerInfo, error)
+
 	ListByNode(ctx context.Context, opts ListContainersByNodeOptions) (*ContainerList, error)
+
+	ListAllByNode(ctx context.Context, opts ListContainersByNodeOptions) ([]ContainerInfo, error)
 
 	SubmitControlActionByName(ctx context.Context, containerName string, action ContainerAction) (*Transaction, error)
 
@@ -139,4 +146,92 @@ func (c *containerClient) GetHistory(ctx context.Context, opts ContainerHistoryO
 
 	err := req.Do(ctx).Into(result)
 	return result, err
+}
+
+func (c *containerClient) ListAllByService(ctx context.Context, opts ListContainersByServiceOptions) ([]ContainerInfo, error) {
+	var allItems []ContainerInfo
+	opts.PageNum = 1
+	if opts.PageSize == 0 {
+		opts.PageSize = 100
+	}
+
+	for {
+		list, err := c.ListByService(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(list.Items) == 0 {
+			break
+		}
+
+		allItems = append(allItems, list.Items...)
+
+		if len(allItems) >= list.Total {
+			break
+		}
+
+		opts.PageNum++
+	}
+	return allItems, nil
+}
+
+func (c *containerClient) ListAllByNode(ctx context.Context, opts ListContainersByNodeOptions) ([]ContainerInfo, error) {
+	var allItems []ContainerInfo
+	opts.PageNum = 1
+	if opts.PageSize == 0 {
+		opts.PageSize = 100
+	}
+
+	for {
+		list, err := c.ListByNode(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(list.Items) == 0 {
+			break
+		}
+
+		allItems = append(allItems, list.Items...)
+
+		if len(allItems) >= list.Total {
+			break
+		}
+
+		opts.PageNum++
+	}
+	return allItems, nil
+}
+
+func (c *containerClient) GetByName(ctx context.Context, serviceClient ServiceInterface, name string) (*ContainerInfo, error) {
+	// 1. 获取所有服务
+	allServices, err := serviceClient.ListAll(ctx, ListServicesOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all services to find container: %w", err)
+	}
+
+	var allServiceIDs []string
+	for _, svc := range allServices {
+		allServiceIDs = append(allServiceIDs, svc.ID)
+	}
+
+	if len(allServiceIDs) == 0 {
+		return nil, fmt.Errorf("no services found in the system")
+	}
+
+	// 2. 获取所有服务下的所有容器
+	allContainers, err := c.ListAllByService(ctx, ListContainersByServiceOptions{ServiceIDs: allServiceIDs})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all containers: %w", err)
+	}
+
+	// 3. 查找匹配的容器
+	for i, container := range allContainers {
+		if container.Name == name {
+			return &allContainers[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("container with name '%s' not found", name)
 }
