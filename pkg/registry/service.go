@@ -1,143 +1,337 @@
+// file: pkg/registry/service.go
+
 package registry
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"time"
 
 	ecsmv1 "github.com/fx147/ecsm-operator/pkg/apis/ecsm/v1"
 	"github.com/google/uuid"
+	bolt "go.etcd.io/bbolt"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
-// GetServiceWithNamespace 是一个类型安全的方法，可以用于获取 ECSMService 对象。
-func (r *Registry) GetService(ctx context.Context, namespace, name string) (*ecsmv1.ECSMService, error) {
-	service := &ecsmv1.ECSMService{}
-	err := r.store.Get(namespace, name, service)
-	if err != nil {
-		return nil, err
-	}
-	return service, nil
-}
-
-// ListServices 列出指定命名空间中的所有 ECSMService 对象。
-func (r *Registry) ListServices(ctx context.Context, namespace string) (*ecsmv1.ECSMServiceList, error) {
-	services := &ecsmv1.ECSMServiceList{}
-	err := r.store.List(namespace, services)
-	if err != nil {
-		return nil, err
-	}
-	return services, nil
-}
+var (
+	_servicesBucketKey = []byte("ecsmservices")
+)
 
 func (r *Registry) CreateService(ctx context.Context, service *ecsmv1.ECSMService) (*ecsmv1.ECSMService, error) {
-	// 业务逻辑1 设置默认值
 	setServiceDefaults(service)
-
-	// 业务逻辑2 验证对象
 	if errs := validateService(service); len(errs) > 0 {
-		// 一般会返回一个包含所有错误的聚合错误
-		// 这里为了简化，只返回第一个
-		return nil, errors.NewInvalid(ecsmv1.Kind("ECSMService"), service.Name, errs)
+		return nil, errors.NewInvalid(ecsmv1.SchemeGroupVersion.WithKind("ECSMService").GroupKind(), service.Name, errs)
 	}
 
-	// 业务逻辑3 填充系统管理的字段
-	uidString := uuid.New().String()
-	service.ObjectMeta.UID = types.UID(uidString)
-	service.ObjectMeta.CreationTimestamp = metav1.Now()
-
-	// 调用底层存储
-	if err := r.store.Create(service); err != nil {
+	key, err := cache.MetaNamespaceKeyFunc(service)
+	if err != nil {
 		return nil, err
 	}
+
+	err = r.db.Update(func(tx *bolt.Tx) error {
+		// 获取元数据和业务数据 bucket
+		metaBucket := tx.Bucket(_metadataBucketKey)
+		b, err := tx.CreateBucketIfNotExists(_servicesBucketKey)
+		if err != nil {
+			return err
+		}
+
+		// 检查对象是否已存在
+		if b.Get([]byte(key)) != nil {
+			return errors.NewAlreadyExists(ecsmv1.SchemeGroupVersion.WithResource("ecsmservices").GroupResource(), service.Name)
+		}
+
+		// 获取并递增全局 RV
+		newRV, err := getAndIncrementGlobalRV(metaBucket)
+		if err != nil {
+			return err
+		}
+
+		// 填充系统字段
+		service.ResourceVersion = strconv.FormatUint(newRV, 10)
+		service.UID = types.UID(uuid.New().String())
+		service.CreationTimestamp = metav1.Time{Time: time.Now().UTC()}
+
+		buf, err := json.Marshal(service)
+		if err != nil {
+			return err
+		}
+
+		return b.Put([]byte(key), buf)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 事务成功后，发布事件
+	r.publish(Event{
+		Type:            Added,
+		Key:             key,
+		Object:          service,
+		ResourceVersion: service.ResourceVersion,
+	})
 
 	return service, nil
 }
 
-// UpdateService 封装了更新一个 ECSMService 的业务逻辑。
-// 这是一个“读取-修改-写入”的原子操作，以防止更新冲突。
 func (r *Registry) UpdateService(ctx context.Context, service *ecsmv1.ECSMService) (*ecsmv1.ECSMService, error) {
-	// --- 第一步：获取当前存储中的老对象 ---
-	// 这是保证所有更新都在最新版本上进行的关键。
-	oldService, err := r.GetService(ctx, service.Namespace, service.Name)
-	if err != nil {
-		// 如果获取时出错（比如没找到），直接返回错误。
-		return nil, err
-	}
-
-	// (未来优化点): 在这里进行 ResourceVersion 的检查，实现乐观锁。
-	// if oldService.ResourceVersion != service.ResourceVersion {
-	//     return nil, errors.NewConflict(...)
-	// }
-
-	// --- 第二步：准备要写入的新对象 ---
-	// 我们不能直接修改传入的 service 对象，因为它可能不完整。
-	// 我们也不能直接修改 oldService，因为它来自存储（或缓存），修改它是不安全的。
-	// 正确的做法是创建一个 oldService 的深拷贝，然后将新对象的变更合并进去。
-	serviceToUpdate := oldService.DeepCopy()
-
-	// --- 第三步：智能地合并字段 ---
-
-	// 1. **Spec 的合并**: 将用户提供的新的 spec，完全覆盖掉旧的 spec。
-	//    这是 Update 操作的核心意图。
-	serviceToUpdate.Spec = service.Spec
-
-	// 2. **Metadata 的合并**: 允许用户更新某些元数据字段，但要保留系统字段。
-	//    我们只允许更新 labels 和 annotations。
-	serviceToUpdate.ObjectMeta.Labels = service.ObjectMeta.Labels
-	serviceToUpdate.ObjectMeta.Annotations = service.ObjectMeta.Annotations
-	// 注意：serviceToUpdate 的 Name, Namespace, UID, CreationTimestamp 等都继承自 oldService，不会被覆盖。
-
-	// 3. **Status 的处理**: UpdateService 方法 *不应该* 修改 Status。
-	//    Status 的更新应该由一个独立的 UpdateStatus 方法来完成。
-	//    所以，我们直接保留 oldService 的 status。
-	//    serviceToUpdate.Status = oldService.Status (DeepCopy 已经帮我们做好了)
-
-	// --- 第四步：执行业务逻辑校验和默认值填充 ---
-	// 我们对这个合并后的、完整的 serviceToUpdate 对象进行校验和填充。
-	setServiceDefaults(serviceToUpdate)
-	if errs := validateService(serviceToUpdate); len(errs) > 0 {
+	oldRVStr := service.ResourceVersion
+	if oldRVStr == "" {
+		errs := field.ErrorList{
+			field.Required(field.NewPath("metadata", "resourceVersion"), "resourceVersion must be specified for an update"),
+		}
 		return nil, errors.NewInvalid(ecsmv1.SchemeGroupVersion.WithKind("ECSMService").GroupKind(), service.Name, errs)
 	}
 
-	// --- 第五步：调用底层存储 ---
-	if err := r.store.Update(serviceToUpdate); err != nil {
+	key, err := cache.MetaNamespaceKeyFunc(service)
+	if err != nil {
 		return nil, err
 	}
 
-	return serviceToUpdate, nil
+	err = r.db.Update(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket(_metadataBucketKey)
+		b := tx.Bucket(_servicesBucketKey)
+		if b == nil {
+			return errors.NewNotFound(ecsmv1.SchemeGroupVersion.WithResource("ecsmservices").GroupResource(), service.Name)
+		}
+
+		// Check: 读取当前对象并比较 RV
+		currentBytes := b.Get([]byte(key))
+		if currentBytes == nil {
+			return errors.NewNotFound(ecsmv1.SchemeGroupVersion.WithResource("ecsmservices").GroupResource(), service.Name)
+		}
+
+		var currentService ecsmv1.ECSMService
+		if err := json.Unmarshal(currentBytes, &currentService); err != nil {
+			return err
+		}
+
+		if currentService.ResourceVersion != oldRVStr {
+			return errors.NewConflict(ecsmv1.SchemeGroupVersion.WithResource("ecsmservices").GroupResource(), service.Name, fmt.Errorf("object has been modified; please apply your changes to the latest version and try again"))
+		}
+
+		// Act: 递增 RV 并写入新对象
+		newRV, err := getAndIncrementGlobalRV(metaBucket)
+		if err != nil {
+			return err
+		}
+
+		service.ResourceVersion = strconv.FormatUint(newRV, 10)
+		// 确保 UID 和创建时间戳不被修改
+		service.UID = currentService.UID
+		service.CreationTimestamp = currentService.CreationTimestamp
+
+		buf, err := json.Marshal(service)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(key), buf)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 发布事件
+	r.publish(Event{
+		Type:            Modified,
+		Key:             key,
+		Object:          service,
+		ResourceVersion: service.ResourceVersion,
+	})
+
+	return service, nil
 }
 
-// 新增一个专门用于更新 Status 的方法
+// ... (List, Get, Delete 等方法的实现也应遵循类似的事务模式) ...
+// UpdateServiceStatus 是一个专门用于更新 Service Status 子资源的业务方法。
+// 它的核心逻辑是：只用传入对象的 status 覆盖存储中的 status，而 spec 和 metadata 保持不变。
 func (r *Registry) UpdateServiceStatus(ctx context.Context, service *ecsmv1.ECSMService) (*ecsmv1.ECSMService, error) {
-	oldService, err := r.GetService(ctx, service.Namespace, service.Name)
+	key, err := cache.MetaNamespaceKeyFunc(service)
 	if err != nil {
 		return nil, err
 	}
 
-	serviceToUpdate := oldService.DeepCopy()
+	var updatedService *ecsmv1.ECSMService
 
-	// 只用新的 status 覆盖旧的 status
-	serviceToUpdate.Status = service.Status
+	err = r.db.Update(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket(_metadataBucketKey)
+		b := tx.Bucket(_servicesBucketKey)
+		if b == nil {
+			return errors.NewNotFound(ecsmv1.Resource("ecsmservices"), service.Name)
+		}
 
-	// 可以在这里对 Status 的某些字段进行验证
-	if errs := validateService(serviceToUpdate); len(errs) > 0 {
-		return nil, errors.NewInvalid(ecsmv1.SchemeGroupVersion.WithKind("ECSMService").GroupKind(), service.Name, errs)
-	}
+		// 1. Get current object from store
+		currentBytes := b.Get([]byte(key))
+		if currentBytes == nil {
+			return errors.NewNotFound(ecsmv1.Resource("ecsmservices"), service.Name)
+		}
 
-	// 调用底层存储
-	if err := r.store.Update(serviceToUpdate); err != nil {
+		var currentService ecsmv1.ECSMService
+		if err := json.Unmarshal(currentBytes, &currentService); err != nil {
+			return err
+		}
+
+		// 2. Prepare the object for update: copy spec and metadata from the stored object,
+		//    and copy status from the incoming object.
+		updatedService = currentService.DeepCopy() // Start with a deep copy of the current state
+		updatedService.Status = service.Status     // Overwrite the status part
+
+		// 3. Increment RV and write back
+		newRV, err := getAndIncrementGlobalRV(metaBucket)
+		if err != nil {
+			return err
+		}
+		updatedService.ResourceVersion = strconv.FormatUint(newRV, 10)
+
+		buf, err := json.Marshal(updatedService)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(key), buf)
+	})
+
+	if err != nil {
 		return nil, err
 	}
 
-	return serviceToUpdate, nil
+	// Publish the MODIFIED event with the fully updated object
+	r.publish(Event{
+		Type:            Modified,
+		Key:             key,
+		Object:          updatedService,
+		ResourceVersion: updatedService.ResourceVersion,
+	})
+
+	return updatedService, nil
 }
 
+// GetService 是一个类型安全的方法，用于从 bbolt 中获取单个 ECSMService。
+func (r *Registry) GetService(ctx context.Context, namespace, name string) (*ecsmv1.ECSMService, error) {
+	key := namespace + "/" + name
+	var service ecsmv1.ECSMService
+
+	// 使用只读事务 (db.View) 进行读取，以获得更好的并发性能
+	err := r.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(_servicesBucketKey)
+		if b == nil {
+			return errors.NewNotFound(ecsmv1.Resource("ecsmservices"), name)
+		}
+
+		val := b.Get([]byte(key))
+		if val == nil {
+			return errors.NewNotFound(ecsmv1.Resource("ecsmservices"), name)
+		}
+
+		return json.Unmarshal(val, &service)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return &service, nil
+}
+
+// ListAllServices 返回指定命名空间下的所有 ECSMService 对象和一个全局的 ResourceVersion。
+// 这个方法将用于 Informer 的 resync 过程。
+func (r *Registry) ListAllServices(ctx context.Context, namespace string) (*ecsmv1.ECSMServiceList, string, error) {
+	serviceList := &ecsmv1.ECSMServiceList{
+		Items: []ecsmv1.ECSMService{},
+	}
+	var resourceVersion string
+
+	err := r.db.View(func(tx *bolt.Tx) error {
+		// --- 在同一个只读事务中，获取数据和全局版本号，保证一致性 ---
+
+		// 1. 获取业务数据
+		b := tx.Bucket(_servicesBucketKey)
+		// 如果 bucket 不存在，说明没有任何 service，直接返回空列表
+		if b == nil {
+			return nil
+		}
+
+		c := b.Cursor()
+		prefix := []byte(namespace + "/")
+
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var service ecsmv1.ECSMService
+			if err := json.Unmarshal(v, &service); err != nil {
+				// 记录错误但继续，以增加健壮性
+				klog.Errorf("Failed to unmarshal service object with key %s: %v", string(k), err)
+				continue
+			}
+			serviceList.Items = append(serviceList.Items, service)
+		}
+
+		// 2. 获取全局 ResourceVersion
+		metaBucket := tx.Bucket(_metadataBucketKey)
+		rvBytes := metaBucket.Get(_globalResourceVersionKey)
+		if rvBytes != nil {
+			rvUint := binary.BigEndian.Uint64(rvBytes)
+			resourceVersion = strconv.FormatUint(rvUint, 10)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, "", err
+	}
+
+	return serviceList, resourceVersion, nil
+}
+
+// DeleteService ... (实现与 Create/Update 类似, 在 Update 事务中)
 func (r *Registry) DeleteService(ctx context.Context, namespace, name string) error {
-	return r.store.Delete(namespace, name, &ecsmv1.ECSMService{})
-}
+	key := namespace + "/" + name
+	var deletedService ecsmv1.ECSMService
 
+	err := r.db.Update(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket(_metadataBucketKey)
+		b := tx.Bucket(_servicesBucketKey)
+		if b == nil {
+			return nil
+		} // Already deleted
+
+		// 在删除前获取对象，以便在事件中传递它
+		val := b.Get([]byte(key))
+		if val == nil {
+			return nil
+		} // Already deleted
+		json.Unmarshal(val, &deletedService)
+
+		if err := b.Delete([]byte(key)); err != nil {
+			return err
+		}
+
+		// 删除也应该递增全局版本号
+		_, err := getAndIncrementGlobalRV(metaBucket)
+		return err
+	})
+
+	if err != nil {
+		return err
+	}
+
+	r.publish(Event{
+		Type:            Deleted,
+		Key:             key,
+		Object:          &deletedService,
+		ResourceVersion: deletedService.ResourceVersion, // 传递被删除前的最后版本
+	})
+
+	return nil
+}
 func setServiceDefaults(service *ecsmv1.ECSMService) {
 	// 填充默认值
 }
