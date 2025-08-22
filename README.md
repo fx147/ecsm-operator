@@ -1,151 +1,113 @@
 # ecsm-operator
-为翼辉公司容器管理平台ECSM设计的调谐循环控制器
 
-## 阶段一
+**一个为资源受限环境设计的、不依赖 Kubernetes 的轻量化云原生编排运行时框架。**
 
-目标： 实现最基础的调谐循环，证明核心逻辑可行。
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](https://github.com/fx147/ecsm-operator)
+[![Go Version](https://img.shields.io/badge/go-1.18+-blue.svg)](https://golang.org/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-实现内容：
+`ecsm-operator` 是一个探索性的后端项目，旨在将 Kubernetes 的核心设计哲学（声明式 API、控制器模式）应用到传统、资源受限的嵌入式环境中。本项目为翼辉公司 SylixOS 嵌入式容器平台 (ECSM) 实现了一套轻量化的控制器运行时框架，为上层高级编排能力的开发构建了坚实的底层基础设施。
 
-1. **定义 API 对象**：用 Go struct 定义你的核心资源，比如 ECSMApp，包含 Spec（期望状态）和 Status（实际状态）字段。
-2. **编写 ECSM 客户端**：封装对 ECSM HTTP API 的调用（ListApps, GetApp, CreateContainer, DeleteContainer 等）。
-3. **实现 reconcile 函数**：业务逻辑核心，比较 desired 和 actual 的差异，然后调用客户端执行操作。
-4. **构建简单的轮询控制器**：
-   - 一个 main 函数或 Run 函数。
-   - 使用 time.Ticker 设置一个固定的轮询周期（例如 30 秒）。
-   - 在循环中：
-     a. 从某个地方读取期望状态（为了简单，可以先硬编码在代码里，或从一个本地 YAML 文件读取）。
-     b. 调用 ECSM 客户端 List 全量实际状态。
-     c. 调用 reconcile 函数。
-     d. 处理错误并打印详细日志。
-### 阶段性任务
-1. **pkg/apis/... (API 定义包)**
-    
-    - **职责**: 存放我们已经定义好的所有 API 结构体，如 ECSMService, ObjectMeta 等。
-        
-    - **状态**: **已完成 95%**。这是我们的地基。
-        
-2. **pkg/registry (ECSM Registry 实现包)**
-    
-    - **职责**: 实现对我们“声明式世界”的存储和检索。它需要提供一个接口，让其他模块可以 Get, List, Create, Update, Delete 我们的 ECSMService 对象。
-        
-    - **初期实现**: 我们将从一个简单的**基于文件的存储 (FileStore)** 开始。它会把每个 ECSMService 对象作为一个单独的 JSON 或 YAML 文件存储在磁盘上。
-        
-3. **pkg/ecsm_client (ECSM API 客户端包)**
-    
-    - **职责**: 封装所有与“现实世界”（ECSM 平台）的 HTTP REST API 交互。它将提供类型安全的方法，如 ListECSMContainers(labels map[string]string) ([]Container, error) 和 CreateECSMContainer(payload *CreateContainerRequest) error。
-        
-    - **作用**: 将控制器与底层的 http.Client 和 JSON 序列化/反序列化逻辑解耦。控制器只需要调用这个客户端的方法，而不需要关心具体的 HTTP 细节。
-        
-4. **pkg/controller (核心控制器逻辑包)**
-    
-    - **职责**: 这是项目的“大脑”。它包含核心的**调谐循环 (Reconciliation Loop)**。
-        
-    - **逻辑**:  
-        a. 从 ECSM Registry 获取一个 ECSMService 对象。  
-        b. 使用 ecsm_client 获取 ECSM 平台上的现实状态。  
-        c. 比较“期望”与“现实”的差异。  
-        d. 使用 ecsm_client 来执行必要的创建/删除操作，以弥合差异。  
-        e. 更新 ECSMService 对象的 status 字段，并将其写回 ECSM Registry。
-        
-5. **cmd/ecsm-operator/main.go (主程序入口)**
-    
-    - **职责**: 这是 Operator 的启动器。
-        
-    - **任务**: 初始化所有模块（创建 registry 实例，创建 ecsm_client 实例，创建 controller 实例），然后启动一个无限循环，定期触发控制器的调谐逻辑。
-        
-6. **cmd/ecsmctl/main.go (命令行工具)**
-    
-    - **职责**: 为用户提供一个与 ECSM Registry 交互的工具。这是用户将他们的 YAML “意图”送入我们系统的唯一方式。
-        
-    - **核心功能**: 实现一个 ecsmctl apply -f <filename.yaml> 命令。该命令会读取 YAML 文件，将其解析为 ECSMService 结构体，然后调用 registry 包的功能将其保存到存储中。
+## 项目立意与核心挑战
 
-### 开发顺序
+在航天器等极端环境中，计算资源（CPU、内存）极其宝贵，且运维操作依赖高延迟、不稳定的星地链路。传统的命令式运维（如通过 SSH 执行脚本）不仅效率低下，且在面对网络中断或瞬时故障时极其脆弱，缺乏自我修复能力。
 
-**第一步（也是下一步）：实现 ECSM Registry (文件存储版)**
+本项目的核心挑战在于：
 
-- **为什么是它？**:
-    
-    - **它是基础**: 控制器 (ecsm-operator) 和命令行 (ecsmctl) 都依赖它。没有它，我们寸步难行。
-        
-    - **它最简单且独立**: 我们可以不依赖任何其他模块，快速地实现一个 FileStore，它只需要能把 ECSMService 对象序列化成 JSON 并写入文件即可。
-        
-- **产出物**: 一个 pkg/registry/filestore.go 文件，提供 Get, Save 等方法。
-    
+1.  **环境约束**: 如何在不引入 Kubernetes 等重量级依赖的前提下，实现其强大的自动化和编排能力？
+2.  **平台局限**: 如何为一个只提供底层 CRUD API 的传统平台 (ECSM)，赋予管理复杂应用所需的**编排**、**状态自愈**和**声明式管理**的能力？
 
-**第二步：实现 ecsmctl 的 apply 命令**
+## 核心架构：K8s 思想的轻量化重塑
 
-- **为什么是它？**:
-    
-    - **完成输入闭环**: 一旦 Registry 完成，我们就可以立刻构建 ecsmctl。这让我们拥有了将用户的 YAML 文件存入我们系统的能力。这个流程一打通，我们就可以为后续的控制器准备好“测试数据”了。
-        
-- **产出物**: 一个可以运行的 ecsmctl 二进制文件，能成功将 ECSMService 的 YAML 存为磁盘上的文件。
-    
+为应对挑战，本项目对 Kubernetes 的核心架构进行了“外科手术式”的解构与重塑，在继承其设计精髓的同时，用更轻量的自研组件替换了其沉重的依赖：
 
-**第三步：定义 ecsm_client 的接口和 Mock 实现**
+| Kubernetes 组件 | 我们的轻量化替代方案 | 核心权衡与决策 |
+| :--- | :--- | :--- |
+| **`etcd` (分布式存储)** | **`bbolt` (嵌入式 KV 存储)** | **放弃分布式**能力，换取**极低的资源占用**和**简化的部署**。 |
+| **`API Server` (网络服务)** | **`Registry` (Go 语言库)** | **放弃网络访问**，控制器通过**本地函数调用**与存储交互，实现**零网络开销**。 |
+| **`Informer` (基于 WATCH)** | **自研 `Informer` (基于“发布/订阅”+轮询)** | 针对无原生 `WATCH` 的后端，通过**应用层事件通知**实现低延迟，通过**周期性全量同步**保证最终一致性。 |
+| **`Cache`/`Indexer` (全量缓存)** | **“版本向量缓存” (`sync.Map`)** | **放弃全量对象缓存**，只缓存 `resourceVersion`，以**可接受的 I/O 开销**换取**数量级的内存节省**。 |
 
-- **为什么是它？**:
-    
-    - **解耦开发**: 控制器的逻辑依赖于 ecsm_client。但我们不希望在开发控制器时，因为网络问题或 ECSM 环境问题而受阻。
-        
-    - **接口先行**: 我们先定义一个 ECSMClient 的 **Go 接口**，比如 type Client interface { ListContainers(...) ... }。
-        
-    - **创建 Mock**: 然后我们创建一个**假的、用于测试的 Mock 实现** (MockClient)，它不发送任何 HTTP 请求，只是返回一些硬编码的假数据。
-        
-- **产出物**: pkg/ecsm_client/client.go (定义接口) 和 pkg/ecsm_client/mock_client.go (用于测试的假客户端)。
+## 技术实现深度解析
 
-- **子任务 3a: 定义 Client 接口**
-    
-    - **为什么**: 这是软件工程的最佳实践。我们先在 pkg/ecsm_client/client.go 中定义一个 Client **接口**，清晰地列出我们需要 ECSM 平台提供哪些能力。
-        
-    - **示例**:
-        ```go
-        package ecsm_client
-        
-        type Client interface {
-            // ListServices 根据标签列出 ECSM 上的服务
-            ListServices(labels map[string]string) ([]ECSMServiceInfo, error)
-            // CreateService 在 ECSM 平台上创建一个新服务
-            CreateService(payload *CreateServiceRequest) (*ECSMServiceInfo, error)
-            // DeleteService 删除一个服务
-            DeleteService(serviceID string) error
-            // ... 其他需要的方法
-        }
-        ```
-        
-    - **好处**: 接口是**契约**。它让我们的控制器可以依赖于这个稳定的契约，而不是某个具体的实现。这为我们未来的测试工作打下了坚实的基础。
-        
-- **子任务 3b: 实现 httpClient 结构体，发起真实 HTTP 请求**
-    
-    - **为什么**: 这就是实现你“价值展示”目标的关键一步。
-        
-    - **任务**: 创建一个 httpClient 结构体，它**实现**我们上面定义的 Client 接口。这个结构体将包含 ECSM 服务器的地址、http.Client 实例，以及所有方法的真实实现——拼接 URL、构造请求体、发送 HTTP 请求、处理响应和错误。
-        
-    - **目标**: 能够通过调用 myClient.CreateService(...)，真正在 ECSM 平台上创建一个容器/服务。
+#### 1. 可插拔的声明式 API 存储层 (`Registry`)
+基于对 K8s 存储模式的分析，项目抽象出通用的 `Store` 接口以解耦业务逻辑与持久化。在对 `PebbleDB` 与 `bbolt` 进行审慎的技术选型后，最终基于 `bbolt` 的**原子事务 (`db.Update`)**，在业务逻辑层实现了**乐观并发控制**，通过 `resourceVersion` 检查原子性地解决了并发写入冲突。
 
-**第四步：编写控制器最核心的调谐骨架**
+#### 2. 混合式事件驱动的 `Informer`
+为解决 `bbolt` **无原生 `WATCH` 机制**的挑战，设计了一套混合式的事件处理与同步模型。
+*   **实时路径**: `Informer` 订阅 `Registry` 的“发布/订阅”事件，通过比对 `resourceVersion` 与内存中的**“版本向量缓存” (`sync.Map`)**，低延迟地处理主动变更，避免了重复事件。
+*   **周期同步路径**: 定期全量 `List` 所有对象，通过将列表与版本缓存进行高效比对来计算出精确的增量变更 (`Added/Updated/Deleted`)，确保了系统的**最终一致性**并能修复任何丢失的事件。
 
-- **理由**: 现在，我们拥有了创建“意图”的工具 (ecsmctl)、存放意图的仓库 (Registry)，以及与“现实”交互的桥梁 (ecsm_client)。是时候构建我们的大脑了。
-    
-- **任务**:
-    
-    1. 在 main.go 中，初始化真实的 FileStore 和真实的 httpClient。
-        
-    2. 将这两个实例**注入**到我们的控制器 Reconciler 中。
-        
-    3. 编写 Reconcile 函数的骨架：
-        
-        - 从 Registry 获取一个 ECSMService。
-            
-        - 调用**真实的 httpClient** 的 ListServices 方法，获取平台上的现有服务。
-            
-        - 进行比较。如果发现期望的 ECSMService 在平台不存在，就调用**真实的 httpClient** 的 CreateService 方法。
-            
-- **目标**: **实现一个完整的、端到端的场景**：运行 ecsmctl apply -f service.yaml，然后启动 ecsm-operator，能亲眼看到 ECSM 平台上真的多出了一个服务！
-    
-第三步提前进行集成：
-1. **快速验证核心价值**: 完成第四步后，你就拥有了一个可以向任何人演示的核心功能闭环。这极大地增强了项目信心。
-    
-2. **提前暴露集成问题**: 与 ECSM API 的集成是最可能出现意外的地方（文档不符、认证复杂、响应奇怪等）。我们把这个最大的风险点提到了最前面，一旦解决，后续开发会非常顺利。
-    
-3. **兼顾良好设计**: 我们通过坚持“接口优先”的原则（3a），保留了未来轻松编写单元测试和 Mock 的能力。当我们想要为控制器编写快速、可靠的测试时，我们只需创建一个 MockClient 来实现同一个 Client 接口，而不需要修改任何一行控制器代码。
+#### 3. 标准的控制器工作流
+实现了**“无全量缓存”**的调谐循环：控制器从 `WorkQueue` (`client-go` 库复用) 获取变更 `key` 后，总是直接从 `Registry` 读取最新的“期望状态 (`spec`)”，并从 `EcsmClient` 读取“现实状态”，确保了决策的实时准确性。
+
+#### 4. 分层的外部 API 客户端库 (`EcsmClient`)
+遵循 `client-go` 的分层思想，设计并实现了 `rest` (底层、链式调用) 和 `clientset` (上层、类型安全) 两层客户端，为所有控制器提供了稳定、一致的 ECSM 平台外部 API 访问入口。
+
+## 项目组件
+
+本项目包含两个主要的可执行文件：
+
+*   **`ecsm-operator`**: 控制器管理器。一个长时间运行的后台服务，负责执行所有的调谐循环。
+*   **`ecsm-cli`**: 一个面向管理员和开发者的命令行工具，用于直接与 ECSM 平台的 API 进行命令式交互（查询、调试等）。
+
+## 目录结构
+
+```
+.
+├── cmd/
+│   ├── ecsm-cli/      # 命令行工具源码
+│   └── ecsm-operator/ # 控制器源码
+├── internal/          # 内部共享包 (e.g., ecsm-cli 的 printer)
+├── pkg/
+│   ├── apis/          # 所有声明式 API 对象的定义 (e.g., ECSMService)
+│   ├── controller/    # 控制器的核心业务逻辑
+│   ├── ecsm-client/   # 与 ECSM API 交互的客户端库
+│   ├── informer/      # 轻量化的 Informer 实现
+│   └── registry/      # 声明式 API 的存储层 (业务逻辑 + bbolt 实现)
+└── ...
+```
+
+## 快速开始
+
+**构建:**
+```bash
+# 构建所有组件
+make build
+
+# 或者单独构建
+go build -o ./bin/ecsm-cli ./cmd/ecsm-cli
+go build -o ./bin/ecsm-operator ./cmd/ecsm-operator
+```
+
+**运行测试:**
+```bash
+make test
+```
+
+## 使用示例 (`ecsm-cli`)
+
+```bash
+# 设置 ECSM 服务器地址 (也可以通过配置文件或环境变量)
+export ECSMCLI_HOST=192.168.1.100
+
+# 获取所有节点列表
+./bin/ecsm-cli get nodes
+
+# 获取 "default" 命名空间下的所有服务
+./bin/ecsm-cli get services -n default
+
+# 查看名为 "worker-1" 的节点的详细信息
+./bin/ecsm-cli describe node worker-1
+```
+
+## 未来路线图
+
+- [ ] **完善 `ecsm-cli`**: 实现 `create`, `delete`, `update` 等写操作命令。
+- [ ] **完成 `ECSMServiceController`**: 完整实现 `Reconcile` 循环中的 `Create/Delete` 容器逻辑和滚动更新策略。
+- [ ] **实现 `ECSMHpaController`**: 基于 `ECSMService.status` 和 `EcsmClient` 的监控指标，实现服务的自动水平伸缩。
+- [ ] **探索更高阶的编排**: 实现基于 `dependsOn` 的服务依赖管理、基于优先级的资源抢占等高级调度功能。
+
+## License
+
+This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
